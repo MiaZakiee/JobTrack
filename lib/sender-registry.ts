@@ -11,8 +11,8 @@ export interface SenderScore {
 }
 
 export const SENDER_REGISTRY: Record<string, SenderScore> = {
-  "linkedin.com": { domain: "linkedin.com", score: -4, isATS: false, label: "LinkedIn" },
-  "indeed.com": { domain: "indeed.com", score: -2, isATS: false, label: "Indeed" },
+  "linkedin.com": { domain: "linkedin.com", score: 0, isATS: false, label: "LinkedIn" },
+  "indeed.com": { domain: "indeed.com", score: 0, isATS: false, label: "Indeed" },
   "greenhouse.io": { domain: "greenhouse.io", score: 4, isATS: true, label: "Greenhouse" },
   "lever.co": { domain: "lever.co", score: 4, isATS: true, label: "Lever" },
   "workday.com": { domain: "workday.com", score: 3, isATS: true, label: "Workday" },

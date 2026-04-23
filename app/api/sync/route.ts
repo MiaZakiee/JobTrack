@@ -71,18 +71,30 @@ async function processPipelineBatch(threads: ThreadContext[]) {
   // 1. Try Groq first (it's much faster)
   if (groq) {
     try {
-      console.log("[Pipeline] Attempting with Groq (Llama 3)...")
+      console.log(`[Pipeline] Attempting ${threads.length} threads with Groq...`)
       const response = await groq.chat.completions.create({
         model: "llama-3.3-70b-versatile",
         messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" }
+        response_format: { type: "json_object" },
+        temperature: 0 // CRITICAL: Deterministic output
       })
       
       const content = response.choices[0].message.content
       if (content) {
         const parsed = JSON.parse(content)
         const results = Array.isArray(parsed) ? parsed : (parsed.threads || Object.values(parsed)[0])
-        if (Array.isArray(results)) return results
+        if (Array.isArray(results)) {
+          // Map results by ID, but fallback to index if AI mangled IDs
+          return threads.map((t, idx) => {
+            const found = results.find(r => r.id === t.id) || results[idx]
+            return {
+              id: t.id,
+              status: found?.status || "junk",
+              company: found?.company || "Unknown",
+              role: found?.role || "Software Engineer"
+            }
+          })
+        }
       }
     } catch (error) {
       console.warn("[Pipeline] Groq failed, falling back to Gemini:", error)
@@ -92,10 +104,13 @@ async function processPipelineBatch(threads: ThreadContext[]) {
   // 2. Try Gemini Models as secondary
   for (const modelName of modelNames) {
     try {
-      console.log(`[Pipeline] Attempting with Gemini ${modelName}...`)
+      console.log(`[Pipeline] Attempting ${threads.length} threads with Gemini ${modelName}...`)
       const currentModel = genAI.getGenerativeModel({
         model: modelName,
-        generationConfig: { responseMimeType: "application/json" }
+        generationConfig: { 
+          responseMimeType: "application/json",
+          temperature: 0 // CRITICAL: Deterministic output
+        }
       })
 
       const result = await currentModel.generateContent(prompt)
@@ -103,7 +118,19 @@ async function processPipelineBatch(threads: ThreadContext[]) {
       const text = response.text()
       const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim()
       const parsed = JSON.parse(cleaned)
-      if (Array.isArray(parsed)) return parsed
+      const results = Array.isArray(parsed) ? parsed : (parsed.threads || Object.values(parsed)[0])
+      
+      if (Array.isArray(results)) {
+        return threads.map((t, idx) => {
+          const found = results.find(r => r.id === t.id) || results[idx]
+          return {
+            id: t.id,
+            status: found?.status || "junk",
+            company: found?.company || "Unknown",
+            role: found?.role || "Software Engineer"
+          }
+        })
+      }
     } catch (error: any) {
       console.warn(`[Pipeline] Gemini ${modelName} failed:`, error.message || error)
       if (error.status === 429 || error.status === 404) continue 
@@ -139,9 +166,17 @@ function localFallback(thread: ThreadContext): { company: string; role: string; 
   const atMatch = thread.subject.match(/at ([\w\s&.-]+)/i)
   if (atMatch) company = atMatch[1].trim()
   
-  if (company === "Unknown") {
+  if (company === "Unknown" || company === "") {
     const dashMatch = thread.subject.match(/^([\w\s&.-]+) -/i)
     if (dashMatch) company = dashMatch[1].trim()
+  }
+
+  // Domain-based fallback for company
+  if (company === "Unknown" || company === "") {
+    const domain = thread.sender.split("@")[1]?.split(">")[0]?.toLowerCase()
+    if (domain && !["gmail.com", "outlook.com", "yahoo.com", "hotmail.com"].includes(domain)) {
+      company = domain.split(".")[0].charAt(0).toUpperCase() + domain.split(".")[0].slice(1)
+    }
   }
 
   if (company === "Unknown") {
@@ -192,113 +227,185 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url)
   const after = searchParams.get("after") || "2026/01/01"
+  const mode = searchParams.get("mode") || "sync"
+  const perQueryCap = mode === "onboard" ? 500 : 100
 
-  try {
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET
-    )
-    oauth2Client.setCredentials({ access_token: session.accessToken })
+  const encoder = new TextEncoder()
 
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client })
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: string, data: any) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+      }
 
-    // Targeted queries to reduce noise
-    const queries = [
-      `from:(greenhouse.io OR workday.com OR smartrecruiters.com OR lever.co OR ashbyhq.com OR breezy.hr) application after:${after}`,
-      `("interview" OR "schedule" OR "video call" OR "zoom" OR "google meet" OR "calendly" OR "availability") ("application" OR "role" OR "position" OR "opportunity") -category:promotions after:${after}`,
-      `("unfortunately" OR "not selected" OR "not moving forward" OR "thank you for your interest") ("application" OR "position") after:${after}`,
-      `("offer letter" OR "congratulations" OR "pleased to offer" OR "onboarding") after:${after}`,
-      `("thank you for applying" OR "received your application") after:${after}`
-    ]
-
-    const allThreadIds = new Set<string>()
-    for (const q of queries) {
-      const res = await gmail.users.threads.list({ userId: "me", q, maxResults: 100 })
-      res.data.threads?.forEach(t => t.id && allThreadIds.add(t.id))
-    }
-
-    const threadDetails: ThreadContext[] = []
-
-    for (const threadId of Array.from(allThreadIds)) {
       try {
-        const threadData = await gmail.users.threads.get({
-          userId: "me",
-          id: threadId,
-          format: "full",
+        const oauth2Client = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET
+        )
+        oauth2Client.setCredentials({ access_token: session.accessToken })
+
+        const gmail = google.gmail({ version: "v1", auth: oauth2Client })
+
+        send("status", { message: "Searching Gmail for job emails...", phase: "fetch" })
+
+        // Targeted queries
+        const queries = [
+          `from:(greenhouse.io OR workday.com OR smartrecruiters.com OR lever.co OR ashbyhq.com OR breezy.hr OR linkedin.com OR indeed.com) application after:${after}`,
+          `("interview" OR "schedule" OR "video call" OR "zoom" OR "google meet" OR "calendly" OR "availability") ("application" OR "role" OR "position" OR "opportunity") -category:promotions after:${after}`,
+          `("unfortunately" OR "not selected" OR "not moving forward" OR "thank you for your interest") ("application" OR "position") after:${after}`,
+          `("offer letter" OR "congratulations" OR "pleased to offer" OR "onboarding") after:${after}`,
+          `("thank you for applying" OR "received your application") after:${after}`,
+          `subject:("application received" OR "application update") after:${after}`
+        ]
+
+        const allThreadIds = new Set<string>()
+        for (const q of queries) {
+          let pageToken: string | undefined = undefined
+          let count = 0
+          
+          do {
+            const res = await gmail.users.threads.list({ 
+              userId: "me", 
+              q, 
+              maxResults: 100,
+              pageToken
+            })
+            
+            res.data.threads?.forEach(t => t.id && allThreadIds.add(t.id))
+            pageToken = res.data.nextPageToken as string | undefined
+            count += res.data.threads?.length || 0
+            
+            if (count >= perQueryCap) break
+          } while (pageToken)
+        }
+
+        if (allThreadIds.size === 0) {
+          send("done", { total: 0, message: "No job-related emails found since " + after })
+          controller.close()
+          return
+        }
+
+        send("status", { message: `Found ${allThreadIds.size} potential threads. Fetching details...`, phase: "fetch_details", total: allThreadIds.size })
+
+        const threadDetails: ThreadContext[] = []
+        let fetchedCount = 0
+
+        for (const threadId of Array.from(allThreadIds)) {
+          try {
+            const threadData = await gmail.users.threads.get({
+              userId: "me",
+              id: threadId,
+              format: "full",
+            })
+
+            const messages = threadData.data.messages || []
+            if (messages.length === 0) continue
+
+            const firstMsg = messages[0]
+            const subject = firstMsg.payload?.headers?.find(h => h.name === "Subject")?.value || "No Subject"
+            const sender = firstMsg.payload?.headers?.find(h => h.name === "From")?.value || ""
+            const date = firstMsg.payload?.headers?.find(h => h.name === "Date")?.value || ""
+
+            const processedMessages: MessageContent[] = messages.map(m => ({
+              id: m.id!,
+              date: new Date(m.payload?.headers?.find(h => h.name === "Date")?.value || "").toISOString(),
+              sender: m.payload?.headers?.find(h => h.name === "From")?.value || "",
+              body: truncateBody(cleanBody(extractBody(m.payload))),
+              snippet: m.snippet || ""
+            }))
+
+            const score = getSenderScore(sender)
+
+            threadDetails.push({
+              id: threadId,
+              subject,
+              sender,
+              date: new Date(date).toISOString(),
+              messages: processedMessages,
+              score
+            })
+            
+            fetchedCount++
+            if (fetchedCount % 10 === 0) {
+              send("status", { message: `Fetched ${fetchedCount}/${allThreadIds.size} threads...`, phase: "fetch_details" })
+            }
+          } catch (err) {
+            console.warn(`[Sync] Failed to fetch thread ${threadId}:`, err)
+          }
+        }
+
+        const filteredThreads = threadDetails.filter(t => {
+          if (t.score >= 2) return true
+          if (t.score < -2) return false
+          const s = t.subject.toLowerCase()
+          const hasJobKeyword = /application|interview|offer|rejected|opportunity|role|position/.test(s)
+          const hasAdKeyword = /job alert|recommended|weekly digest|hiring now/.test(s)
+          return hasJobKeyword && !hasAdKeyword
         })
 
-        const messages = threadData.data.messages || []
-        if (messages.length === 0) continue
+        if (filteredThreads.length === 0) {
+          send("done", { total: 0, message: "No job-related threads passed filtering." })
+          controller.close()
+          return
+        }
 
-        const firstMsg = messages[0]
-        const subject = firstMsg.payload?.headers?.find(h => h.name === "Subject")?.value || "No Subject"
-        const sender = firstMsg.payload?.headers?.find(h => h.name === "From")?.value || ""
-        const date = firstMsg.payload?.headers?.find(h => h.name === "Date")?.value || ""
+        const BATCH_SIZE = 10 
+        const totalBatches = Math.ceil(filteredThreads.length / BATCH_SIZE)
+        let totalProcessed = 0
 
-        const processedMessages: MessageContent[] = messages.map(m => ({
-          id: m.id!,
-          date: new Date(m.payload?.headers?.find(h => h.name === "Date")?.value || "").toISOString(),
-          sender: m.payload?.headers?.find(h => h.name === "From")?.value || "",
-          body: truncateBody(cleanBody(extractBody(m.payload))),
-          snippet: m.snippet || ""
-        }))
+        for (let i = 0; i < filteredThreads.length; i += BATCH_SIZE) {
+          const batch = filteredThreads.slice(i, i + BATCH_SIZE)
+          const batchNum = Math.floor(i / BATCH_SIZE) + 1
+          
+          send("status", { 
+            message: `Classifying batch ${batchNum} of ${totalBatches}...`, 
+            phase: "classify",
+            batch: batchNum,
+            totalBatches
+          })
 
-        const score = getSenderScore(sender)
+          const results = await processPipelineBatch(batch)
+          
+          const batchApps = batch.map(t => {
+            const classification = results.find(r => r.id === t.id)
+            if (!classification || classification.status === "junk") return null
 
-        threadDetails.push({
-          id: threadId,
-          subject,
-          sender,
-          date: new Date(date).toISOString(),
-          messages: processedMessages,
-          score
-        })
-      } catch (err) {
-        console.warn(`[Sync] Failed to fetch thread ${threadId}:`, err)
+            return {
+              id: t.id,
+              company: classification.company === "Unknown" ? "Unknown Company" : classification.company,
+              role: classification.role,
+              status: classification.status as Application["status"],
+              source: detectSource(t.sender),
+              date: t.date,
+              subject: t.subject
+            }
+          }).filter((app): app is Application => !!app)
+
+          send("batch", { 
+            applications: batchApps, 
+            batchIndex: batchNum, 
+            totalBatches 
+          })
+          
+          totalProcessed += batchApps.length
+        }
+
+        send("done", { total: totalProcessed, mode })
+      } catch (error: any) {
+        console.error("Gmail sync error:", error)
+        send("error", { message: error.message || "An unknown error occurred" })
+      } finally {
+        controller.close()
       }
     }
+  })
 
-    const filteredThreads = threadDetails.filter(t => {
-      if (t.score >= 2) return true
-      if (t.score < -2) return false
-      const s = t.subject.toLowerCase()
-      const hasJobKeyword = /application|interview|offer|rejected|opportunity|role|position/.test(s)
-      const hasAdKeyword = /job alert|recommended|weekly digest|hiring now/.test(s)
-      return hasJobKeyword && !hasAdKeyword
-    })
-
-    // Batch classify with Gemini or Groq
-    const BATCH_SIZE = 10 // Reduced to 10 for better token management on Groq
-    const results: { id: string; status: Application["status"] | "junk"; company: string; role: string }[] = []
-    
-    for (let i = 0; i < filteredThreads.length; i += BATCH_SIZE) {
-      const batch = filteredThreads.slice(i, i + BATCH_SIZE)
-      const classifications = await processPipelineBatch(batch)
-      results.push(...classifications)
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
     }
-
-    const applications: Application[] = filteredThreads.map(t => {
-      const classification = results.find(r => r.id === t.id)
-      if (!classification || classification.status === "junk") return null
-
-      return {
-        id: t.id,
-        company: classification.company,
-        role: classification.role,
-        status: classification.status as Application["status"],
-        source: detectSource(t.sender),
-        date: t.date,
-        subject: t.subject
-      }
-    }).filter((app): app is Application => !!app && app.company !== "Unknown")
-
-    const uniqueApps = Array.from(new Map(applications.map(a => [a.id, a])).values())
-    uniqueApps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-
-    return NextResponse.json({ applications: uniqueApps, total: uniqueApps.length })
-  } catch (error: unknown) {
-    console.error("Gmail sync error:", error)
-    const errorMessage = error instanceof Error ? error.message : "An unknown error occurred"
-    return NextResponse.json({ error: errorMessage }, { status: 500 })
-  }
+  })
 }
