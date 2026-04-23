@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/auth"
 import { google } from "googleapis"
+import { GoogleGenerativeAI } from "@google/generative-ai"
 
 export interface Application {
   id: string
@@ -12,58 +13,48 @@ export interface Application {
   subject: string
 }
 
-function classifyEmail(subject: string, snippet: string): Application["status"] {
-  const t = (subject + " " + snippet).toLowerCase()
-  if (/passed|confirmed.*interview|interview.*confirm|your.*interview.*is|interview is all set/i.test(t)) return "interview"
-  if (/interview|phone screen|screening call|schedule.*call|zoom invite/i.test(t)) return "interview"
-  if (/not.*select|unfortunately|regret|moved.*forward|other candidate|not.*progress|no longer considering/i.test(t)) return "rejected"
-  if (/offer|pleased.*offer|congratulations.*offer/i.test(t)) return "offer"
-  if (/application.*viewed|viewed.*application/i.test(t)) return "viewed"
-  if (/reviewing|under review|we.*receiv|thank you.*applying|application.*receiv|we.*look forward.*review/i.test(t)) return "review"
-  if (/application.*sent|sent.*application/i.test(t)) return "applied"
-  return "applied"
-}
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!)
+const model = genAI.getGenerativeModel({
+  model: "gemini-1.5-flash",
+  generationConfig: { responseMimeType: "application/json" }
+})
 
-function extractCompany(subject: string, snippet: string): string {
-  let m: RegExpMatchArray | null
+async function classifyThreadsBatch(threads: { id: string; subject: string; snippets: string[] }[]) {
+  if (threads.length === 0) return []
 
-  m = subject.match(/sent to (.+?)(?:\s*$)/i)
-  if (m) return m[1].trim()
+  const prompt = `
+    You are an expert job application tracker. Analyze the following ${threads.length} email threads and extract details for each.
+    
+    For each thread, determine:
+    1. status: Must be exactly one of: "applied", "viewed", "review", "interview", "rejected", "offer".
+       - "offer": Explicit job offer or "congratulations".
+       - "rejected": "unable to offer", "not moving forward", "not selected", "unfortunately", etc.
+       - "interview": Invitation to chat, schedule a call, or interview confirmation.
+       - "review": "under review", "reviewing your application".
+       - "viewed": "employer viewed your application".
+       - "applied": Initial application receipt.
+    2. company: The name of the company.
+    3. role: The job title (e.g., "Software Engineer").
+    
+    Return a JSON array of objects with keys: "id", "status", "company", "role".
+    
+    Threads:
+    ${threads.map((t) => `
+    ID: ${t.id}
+    Subject: ${t.subject}
+    Messages:
+    ${t.snippets.map((s, j) => `  ${j + 1}. ${s}`).join("\n")}
+    `).join("\n---")}
+  `
 
-  m = subject.match(/application.*?(?:to|with|at)\s+(.+?)(?:\s*[-–!,]|$)/i)
-  if (m) return m[1].replace(/[!.,]+$/, "").trim()
-
-  m = subject.match(/(?:thank you for applying to|applying to)\s+(.+?)(?:\s*[-–!.]|$)/i)
-  if (m) return m[1].trim()
-
-  m = subject.match(/application.*submitted.*to\s+(.+?)(?:\s*[-–]|$)/i)
-  if (m) return m[1].trim()
-
-  m = snippet.match(/(?:to|at|with)\s+([A-Z][^\s,]+(?:\s+[A-Z][^\s,]+){0,3})\s*(?:\.|\!|,|$)/m)
-  if (m) return m[1].trim()
-
-  return "Unknown"
-}
-
-function extractRole(subject: string): string {
-  let m: RegExpMatchArray | null
-
-  m = subject.match(/Indeed Application:\s*(.+)/i)
-  if (m) return m[1].trim()
-
-  m = subject.match(/application to (.+?) at /i)
-  if (m) return m[1].trim()
-
-  m = subject.match(/application for (?:the\s+)?(.+?)(?:\s*[-–,]|\s+position|\s+role|$)/i)
-  if (m) return m[1].trim()
-
-  m = subject.match(/applying.*?(?:for|to)\s+(?:the\s+)?(.+?)(?:\s*role|\s*position|$)/i)
-  if (m) return m[1].trim()
-
-  m = subject.match(/^(.+?)\s*[-–]\s*(?:application|confirmation)/i)
-  if (m) return m[1].trim()
-
-  return "Software Engineer"
+  try {
+    const result = await model.generateContent(prompt)
+    const response = await result.response
+    return JSON.parse(response.text())
+  } catch (error) {
+    console.error("Gemini classification error:", error)
+    return []
+  }
 }
 
 function detectSource(sender: string): string {
@@ -101,18 +92,13 @@ export async function GET(request: Request) {
     const threadsRes = await gmail.users.threads.list({
       userId: "me",
       q: query,
-      maxResults: 100,
+      maxResults: 50,
     })
 
-    const threads = threadsRes.data.threads || []
-    const applications: Application[] = []
-    const seen = new Set<string>()
+    const gmailThreads = threadsRes.data.threads || []
+    const threadDetails = []
 
-    const statusPriority: Record<string, number> = {
-      offer: 6, interview: 5, rejected: 4, review: 3, viewed: 2, applied: 1,
-    }
-
-    for (const thread of threads) {
+    for (const thread of gmailThreads) {
       const threadData = await gmail.users.threads.get({
         userId: "me",
         id: thread.id!,
@@ -121,57 +107,51 @@ export async function GET(request: Request) {
       })
 
       const messages = threadData.data.messages || []
-      let bestStatus: Application["status"] = "applied"
-      let bestPriority = 0
-      let company = ""
-      let role = ""
-      let date = ""
-      let source = "Direct"
-      let subject = ""
+      const subject = messages[0]?.payload?.headers?.find(h => h.name === "Subject")?.value || "No Subject"
+      const date = messages[0]?.payload?.headers?.find(h => h.name === "Date")?.value || ""
+      const sender = messages[0]?.payload?.headers?.find(h => h.name === "From")?.value || ""
+      const snippets = messages.map(m => m.snippet || "").filter(Boolean)
 
-      for (const msg of messages) {
-        const headers = msg.payload?.headers || []
-        const subj = headers.find((h) => h.name === "Subject")?.value || ""
-        const from = headers.find((h) => h.name === "From")?.value || ""
-        const dateStr = headers.find((h) => h.name === "Date")?.value || ""
-        const snippet = msg.snippet || ""
-
-        const status = classifyEmail(subj, snippet)
-        const priority = statusPriority[status] || 0
-        if (priority > bestPriority) {
-          bestPriority = priority
-          bestStatus = status
-        }
-
-        if (!subject) subject = subj
-        if (!date) date = new Date(dateStr).toISOString()
-        if (!company || company === "Unknown") company = extractCompany(subj, snippet)
-        if (!role || role === "Software Engineer") role = extractRole(subj)
-        if (source === "Direct") source = detectSource(from)
-      }
-
-      if (!company || company === "Unknown") continue
-
-      const key = `${company.toLowerCase()}|${role.toLowerCase()}`
-      if (seen.has(key)) continue
-      seen.add(key)
-
-      applications.push({
+      threadDetails.push({
         id: thread.id!,
-        company,
-        role,
-        status: bestStatus,
-        source,
-        date,
         subject,
+        date: new Date(date).toISOString(),
+        source: detectSource(sender),
+        snippets
       })
     }
 
-    applications.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    // Batch classify with Gemini (max 25 per batch to be safe)
+    const BATCH_SIZE = 25
+    const results: { id: string; status: Application["status"]; company: string; role: string }[] = []
+    for (let i = 0; i < threadDetails.length; i += BATCH_SIZE) {
+      const batch = threadDetails.slice(i, i + BATCH_SIZE)
+      const classifications = await classifyThreadsBatch(batch)
+      results.push(...classifications)
+    }
 
-    return NextResponse.json({ applications, total: applications.length })
-  } catch (error: any) {
+    const applications: Application[] = threadDetails.map(t => {
+      const classification = results.find(r => r.id === t.id)
+      return {
+        id: t.id,
+        company: classification?.company || "Unknown",
+        role: classification?.role || "Software Engineer",
+        status: classification?.status || "applied",
+        source: t.source,
+        date: t.date,
+        subject: t.subject
+      }
+    }).filter(app => app.company !== "Unknown")
+
+    // Remove duplicates (same company + role)
+    const uniqueApps = Array.from(new Map(applications.map(a => [`${a.company.toLowerCase()}|${a.role.toLowerCase()}`, a])).values())
+
+    uniqueApps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+    return NextResponse.json({ applications: uniqueApps, total: uniqueApps.length })
+  } catch (error: unknown) {
     console.error("Gmail sync error:", error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    const errorMessage = error instanceof Error ? error.message : "An unknown error occurred"
+    return NextResponse.json({ error: errorMessage }, { status: 500 })
   }
 }

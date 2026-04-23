@@ -19,17 +19,6 @@ export default function Dashboard() {
   const [filterSource, setFilterSource] = useState("")
   const [error, setError] = useState("")
 
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    const savedAt = localStorage.getItem(SYNCED_AT_KEY)
-    if (saved) {
-      setApps(JSON.parse(saved))
-      setSyncedAt(savedAt)
-    } else {
-      handleSync()
-    }
-  }, [])
-
   const handleSync = useCallback(async () => {
     setLoading(true)
     setError("")
@@ -42,12 +31,27 @@ export default function Dashboard() {
       const now = new Date().toISOString()
       localStorage.setItem(SYNCED_AT_KEY, now)
       setSyncedAt(now)
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "An unknown error occurred")
     } finally {
       setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    const savedAt = localStorage.getItem(SYNCED_AT_KEY)
+    if (saved) {
+      setTimeout(() => {
+        setApps(JSON.parse(saved))
+        setSyncedAt(savedAt)
+      }, 0)
+    } else {
+      setTimeout(() => {
+        handleSync()
+      }, 0)
+    }
+  }, [handleSync])
 
   const handleExport = () => {
     const headers = ["Company", "Role", "Status", "Source", "Date"]
