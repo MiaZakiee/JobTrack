@@ -17,15 +17,13 @@ export interface Application {
 }
 
 import { OpenAI } from "openai"
-import { ENV_CONFIG } from "@/lib/env-config"
 
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || ENV_CONFIG.GOOGLE_GEMINI_API_KEY)
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!)
 
 // Groq client (OpenAI compatible)
-const groqKey = process.env.GROQ_API_KEY || ENV_CONFIG.GROQ_API_KEY
-const groq = groqKey
+const groq = process.env.GROQ_API_KEY 
   ? new OpenAI({ 
-      apiKey: groqKey, 
+      apiKey: process.env.GROQ_API_KEY, 
       baseURL: "https://api.groq.com/openai/v1" 
     }) 
   : null
