@@ -10,7 +10,7 @@ export interface Application {
   id: string
   company: string
   role: string
-  status: "applied" | "interview" | "rejected" | "offer"
+  status: "applied" | "responded" | "interview" | "rejected" | "offer"
   source: string
   date: string
   subject: string
@@ -44,7 +44,7 @@ async function processPipelineBatch(threads: ThreadContext[]) {
     "junk" includes: mass marketing emails, weekly job alerts, "people are hiring" notifications, ads, newsletters, or generic platform updates.
     
     If NOT junk, extract the following:
-    - "status": MUST be one of: "applied", "interview", "rejected", "offer", "junk".
+    - "status": MUST be one of: "applied", "responded", "interview", "rejected", "offer", "junk".
     - "company": Name of the hiring company.
     - "role": Job title (e.g., "Software Engineer").
     
@@ -52,6 +52,7 @@ async function processPipelineBatch(threads: ThreadContext[]) {
     - "offer": Official job offer, congratulations, or onboarding steps.
     - "rejected": Explicitly stating they are not moving forward or you weren't selected.
     - "interview": Any mention of scheduling, video calls, Zoom, Calendly, or "next steps" that involve a meeting.
+    - "responded": Company has replied but it's NOT clearly an interview, offer, or rejection. Includes: recruiter saying they'll review your profile, asking clarifying questions, sending assessments or technical tests, generic "we'll get back to you" replies, or any acknowledgement beyond the initial application confirmation.
     - "applied": Application confirmations or acknowledgement of receipt.
     
     IMPORTANT: Base the "status" on the LATEST message in the thread.
@@ -160,6 +161,7 @@ function localFallback(thread: ThreadContext): { company: string; role: string; 
   if (STATUS_KEYWORDS.offer.some(k => combined.includes(k))) status = "offer"
   else if (STATUS_KEYWORDS.rejected.some(k => combined.includes(k))) status = "rejected"
   else if (STATUS_KEYWORDS.interview.some(k => combined.includes(k))) status = "interview"
+  else if (STATUS_KEYWORDS.responded.some(k => combined.includes(k))) status = "responded"
   
   // Improved company extraction
   let company = "Unknown"

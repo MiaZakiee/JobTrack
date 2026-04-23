@@ -5,6 +5,7 @@ import type { Application } from "@/app/api/sync/route"
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   applied: { label: "Applied", className: "bg-blue-500/10 text-blue-400 border border-blue-500/20" },
+  responded: { label: "Responded", className: "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20" },
   interview: { label: "Interview", className: "bg-green-500/10 text-green-400 border border-green-500/20" },
   rejected: { label: "Rejected", className: "bg-red-500/10 text-red-400 border border-red-500/20" },
   offer: { label: "Offer", className: "bg-teal-500/10 text-teal-400 border border-teal-500/20" },

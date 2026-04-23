@@ -2,6 +2,7 @@ import type { Application } from "@/app/api/sync/route"
 
 const STATS = [
   { key: "total", label: "Total", color: "text-white" },
+  { key: "responded", label: "Responded", color: "text-yellow-400" },
   { key: "interview", label: "Interview", color: "text-green-400" },
   { key: "rejected", label: "Rejected", color: "text-red-400" },
   { key: "offer", label: "Offer", color: "text-teal-400" },
@@ -18,7 +19,7 @@ export default function StatsBar({ apps, filterStatus, onFilterChange }: StatsBa
   for (const app of apps) counts[app.status] = (counts[app.status] || 0) + 1
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
       {STATS.map(({ key, label, color }) => {
         const isActive = filterStatus === key || (key === 'total' && filterStatus === '')
         

@@ -264,6 +264,7 @@ export default function Dashboard() {
               >
                 <option value="">All statuses</option>
                 <option value="applied">Applied</option>
+                <option value="responded">Responded</option>
                 <option value="interview">Interview</option>
                 <option value="rejected">Rejected</option>
                 <option value="offer">Offer</option>

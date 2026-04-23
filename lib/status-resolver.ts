@@ -9,9 +9,10 @@ type Status = Application["status"]
 
 const STATUS_RANK: Record<Status, number> = {
   applied: 1,
-  interview: 2,
-  rejected: 3,
-  offer: 4,
+  responded: 2,
+  interview: 3,
+  rejected: 4,
+  offer: 5,
 }
 
 /**
@@ -39,5 +40,6 @@ export const STATUS_KEYWORDS = {
   offer: ["offer", "congratulations", "pleased to offer", "onboarding"],
   rejected: ["unfortunately", "not selected", "not moving forward", "thank you for your interest"],
   interview: ["interview", "schedule", "chat", "zoom", "google meet", "calendly", "availability"],
+  responded: ["reviewing", "get back to you", "under review", "assessment", "follow up", "technical test", "next steps", "we will review", "currently reviewing", "shortlisted"],
   applied: ["thank you for applying", "received your application", "application received"],
 }

@@ -17,38 +17,38 @@ export default function Home() {
   if (session) return <Dashboard />
 
   return (
-    <main className="min-h-screen bg-white flex flex-col">
-      <nav className="border-b border-gray-100 px-6 py-4 flex items-center justify-between">
+    <main className="min-h-screen bg-[#0a0a0a] flex flex-col">
+      <nav className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center">
             <Zap className="w-4 h-4 text-white" />
           </div>
-          <span className="font-semibold text-gray-900">JobTracker</span>
+          <span className="font-semibold text-white">JobTracker</span>
         </div>
         <button
           onClick={() => signIn("google")}
-          className="text-sm text-gray-600 hover:text-gray-900 font-medium"
+          className="text-sm text-zinc-400 hover:text-white font-medium"
         >
           Sign in
         </button>
       </nav>
 
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-20 text-center">
-        <div className="inline-flex items-center gap-2 bg-blue-50 text-blue-700 text-xs font-medium px-3 py-1.5 rounded-full mb-8">
-          <span className="w-1.5 h-1.5 bg-blue-500 rounded-full" />
+        <div className="inline-flex items-center gap-2 bg-blue-500/10 text-blue-400 text-xs font-medium px-3 py-1.5 rounded-full mb-8 border border-blue-500/20">
+          <span className="w-1.5 h-1.5 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.8)]" />
           No manual entry. No AI tokens. Just Gmail.
         </div>
 
-        <h1 className="text-5xl font-semibold text-gray-900 tracking-tight max-w-2xl leading-tight mb-5">
+        <h1 className="text-5xl font-semibold text-white tracking-tight max-w-2xl leading-tight mb-5">
           Your job search,<br />tracked automatically
         </h1>
-        <p className="text-lg text-gray-500 max-w-md mb-10">
+        <p className="text-lg text-zinc-400 max-w-md mb-10">
           Connect your Gmail and JobTracker reads your inbox to find every application, interview, and rejection — automatically.
         </p>
 
         <button
           onClick={() => signIn("google")}
-          className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-6 py-3.5 text-sm font-medium text-gray-800 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm"
+          className="flex items-center gap-3 bg-black border border-zinc-700 rounded-xl px-6 py-3.5 text-sm font-medium text-white hover:bg-zinc-900 hover:border-zinc-600 transition-all shadow-sm"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -59,22 +59,22 @@ export default function Home() {
           Continue with Google
         </button>
 
-        <p className="text-xs text-gray-400 mt-4">
+        <p className="text-xs text-zinc-500 mt-4">
           We only request read-only Gmail access. Your emails never leave your browser session.
         </p>
 
-        <div className="grid grid-cols-3 gap-6 mt-20 max-w-2xl w-full text-left">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-20 max-w-2xl w-full text-left">
           {[
             { icon: Mail, title: "Reads your Gmail", desc: "Scans your inbox for job application emails automatically on sign-in." },
             { icon: BarChart3, title: "Tracks every status", desc: "Applied, viewed, interview, rejected, offer — all classified from email content." },
             { icon: RefreshCw, title: "Stays up to date", desc: "Hit sync anytime to pick up new emails and update your pipeline." },
           ].map(({ icon: Icon, title, desc }) => (
             <div key={title} className="flex flex-col gap-2">
-              <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
-                <Icon className="w-4 h-4 text-gray-600" />
+              <div className="w-8 h-8 bg-zinc-800/50 rounded-lg flex items-center justify-center">
+                <Icon className="w-4 h-4 text-zinc-400" />
               </div>
-              <p className="text-sm font-medium text-gray-800">{title}</p>
-              <p className="text-xs text-gray-500 leading-relaxed">{desc}</p>
+              <p className="text-sm font-medium text-white">{title}</p>
+              <p className="text-xs text-zinc-400 leading-relaxed">{desc}</p>
             </div>
           ))}
         </div>
