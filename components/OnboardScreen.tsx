@@ -97,6 +97,7 @@ export default function OnboardScreen({ onStart, syncStatus, syncCount, loading 
                 </div>
                 <div className="mt-8 space-y-2">
                   <p className="text-lg font-black text-gray-900 tracking-tight">{syncStatus || "Syncing..."}</p>
+                  <p className="text-xs text-gray-500 pb-2">We'll automatically take you to the dashboard once the first batch of emails is processed.</p>
                   <div className="flex items-center justify-center gap-2 text-sm font-bold text-blue-600 bg-blue-50 px-4 py-1.5 rounded-full mx-auto w-fit">
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -110,10 +111,14 @@ export default function OnboardScreen({ onStart, syncStatus, syncCount, loading 
           )}
         </div>
         
-        <div className="bg-gray-50/50 border-t border-gray-100 px-10 py-6">
-          <div className="flex justify-between items-center opacity-40">
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Security</span>
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Read Only</span>
+        <div className="bg-gray-50/50 border-t border-gray-100 px-8 py-6">
+          <div className="flex flex-col gap-3 text-left">
+            <div className="text-xs text-gray-500 leading-relaxed">
+              <span className="font-bold text-gray-700">100% Local & Read-Only:</span> We do not have a database. Your data is saved entirely in your browser's local storage. Your emails are only processed securely via API and never stored on our servers.
+            </div>
+            <div className="text-xs text-amber-600 leading-relaxed bg-amber-50/50 p-2 rounded-lg border border-amber-100/50">
+              <span className="font-bold">AI Classification:</span> We use LLMs to extract your application status. Since AI isn't perfect, some classifications might be inaccurate.
+            </div>
           </div>
         </div>
       </div>

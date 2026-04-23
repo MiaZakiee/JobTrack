@@ -163,13 +163,13 @@ export default function Dashboard() {
   })
 
   if (onboarded === null) return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a]">
+      <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
     </div>
   )
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#0a0a0a] text-white">
       {/* Onboarding Modal Gate */}
       {!onboarded && (
         <OnboardScreen 
@@ -179,44 +179,44 @@ export default function Dashboard() {
           loading={loading}
         />
       )}
-      <nav className="bg-white border-b border-gray-100 px-6 py-3.5 flex items-center justify-between sticky top-0 z-20 shadow-sm shadow-gray-100/50">
+      <nav className="bg-[#111] border-b border-zinc-800 px-4 sm:px-6 py-3.5 flex items-center justify-between sticky top-0 z-20 shadow-sm shadow-black/50 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center">
             <Zap className="w-4 h-4 text-white" />
           </div>
-          <span className="font-bold text-gray-900 tracking-tight">JobTracker</span>
+          <span className="font-bold text-white tracking-tight">JobTracker</span>
         </div>
         <div className="flex items-center gap-3">
           {syncedAt && (
-            <span className="text-[10px] font-bold text-gray-400 hidden sm:block uppercase tracking-wider">
+            <span className="text-[10px] font-bold text-zinc-500 hidden sm:block uppercase tracking-wider">
               Last Synced {new Date(syncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
           )}
           <button
             onClick={handleReimport}
-            className="text-[10px] font-bold text-gray-400 hover:text-red-500 uppercase tracking-wider transition-colors mr-2 hidden md:block"
+            className="text-[10px] font-bold text-zinc-500 hover:text-red-400 uppercase tracking-wider transition-colors mr-1 sm:mr-2 hidden md:block"
           >
             Re-import
           </button>
           <button
             onClick={handleExport}
             disabled={apps.length === 0}
-            className="flex items-center gap-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 text-xs text-zinc-300 border border-zinc-700 rounded-lg px-2 sm:px-3 py-1.5 hover:bg-zinc-800 disabled:opacity-40 transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
-            Export CSV
+            <span className="hidden sm:inline">Export CSV</span>
           </button>
           <button
             onClick={() => handleSync(false)}
             disabled={loading}
-            className="flex items-center gap-1.5 text-xs text-white bg-blue-600 rounded-lg px-3 py-1.5 hover:bg-blue-700 disabled:opacity-60 transition-all shadow-md shadow-blue-100"
+            className="flex items-center gap-1.5 text-xs text-white bg-blue-600 rounded-lg px-2 sm:px-3 py-1.5 hover:bg-blue-700 disabled:opacity-60 transition-all shadow-md shadow-blue-900/50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-            {loading ? "Syncing..." : "Sync"}
+            <span className="hidden sm:inline">{loading ? "Syncing..." : "Sync"}</span>
           </button>
           <button
             onClick={() => signOut()}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+            className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors"
             title="Sign out"
           >
             <LogOut className="w-4 h-4" />
@@ -224,18 +224,18 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-xl sm:text-2xl font-bold text-white mb-1">
             Welcome back, {session?.user?.name?.split(" ")[0]} 👋
           </h1>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-zinc-400">
             {apps.length} applications tracked from your Gmail
           </p>
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-100 rounded-2xl px-5 py-4 text-sm text-red-700 mb-8 flex items-center gap-3">
+          <div className="bg-red-950/50 border border-red-900 rounded-2xl px-5 py-4 text-sm text-red-400 mb-8 flex items-center gap-3">
             <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
             {error}
           </div>
@@ -245,41 +245,43 @@ export default function Dashboard() {
 
         <StatsBar apps={apps} />
 
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 overflow-hidden mt-8">
-          <div className="px-6 py-5 border-b border-gray-100 flex flex-wrap gap-4 items-center bg-gray-50/30">
-            <div className="relative flex-1 min-w-[200px]">
+        <div className="bg-[#111] rounded-2xl sm:rounded-3xl border border-zinc-800 shadow-xl shadow-black/40 overflow-hidden mt-6 sm:mt-8">
+          <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-zinc-800 flex flex-col sm:flex-row flex-wrap gap-3 sm:gap-4 items-stretch sm:items-center bg-[#111]">
+            <div className="relative flex-1 w-full sm:min-w-[200px]">
               <input
                 type="text"
                 placeholder="Search company or role..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full text-sm border border-gray-200 rounded-xl px-4 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                className="w-full text-sm border border-zinc-700 rounded-xl px-4 py-2.5 sm:py-2 bg-black text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
               />
             </div>
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="text-sm border border-gray-200 rounded-xl px-4 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer"
-            >
-              <option value="">All statuses</option>
-              <option value="applied">Applied</option>
-              <option value="interview">Interview</option>
-              <option value="rejected">Rejected</option>
-              <option value="offer">Offer</option>
-            </select>
-            <select
-              value={filterSource}
-              onChange={(e) => setFilterSource(e.target.value)}
-              className="text-sm border border-gray-200 rounded-xl px-4 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer"
-            >
-              <option value="">All sources</option>
-              <option value="LinkedIn">LinkedIn</option>
-              <option value="Indeed">Indeed</option>
-              <option value="Direct">Direct</option>
-              <option value="Workday">Workday</option>
-              <option value="Greenhouse">Greenhouse</option>
-            </select>
-            <span className="text-[10px] font-bold text-gray-400 ml-auto uppercase tracking-wider">{filtered.length} results</span>
+            <div className="flex gap-3 sm:gap-4 w-full sm:w-auto">
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="flex-1 sm:flex-none text-sm border border-zinc-700 rounded-xl px-3 sm:px-4 py-2.5 sm:py-2 bg-black text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all cursor-pointer"
+              >
+                <option value="">All statuses</option>
+                <option value="applied">Applied</option>
+                <option value="interview">Interview</option>
+                <option value="rejected">Rejected</option>
+                <option value="offer">Offer</option>
+              </select>
+              <select
+                value={filterSource}
+                onChange={(e) => setFilterSource(e.target.value)}
+                className="flex-1 sm:flex-none text-sm border border-zinc-700 rounded-xl px-3 sm:px-4 py-2.5 sm:py-2 bg-black text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all cursor-pointer"
+              >
+                <option value="">All sources</option>
+                <option value="LinkedIn">LinkedIn</option>
+                <option value="Indeed">Indeed</option>
+                <option value="Direct">Direct</option>
+                <option value="Workday">Workday</option>
+                <option value="Greenhouse">Greenhouse</option>
+              </select>
+            </div>
+            <span className="text-[10px] font-bold text-zinc-500 w-full sm:w-auto text-right sm:ml-auto uppercase tracking-wider mt-1 sm:mt-0">{filtered.length} results</span>
           </div>
 
           <ApplicationTable apps={filtered} loading={false} />
