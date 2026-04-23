@@ -7,7 +7,7 @@ export interface Application {
   id: string
   company: string
   role: string
-  status: "applied" | "viewed" | "review" | "interview" | "rejected" | "offer"
+  status: "applied" | "interview" | "rejected" | "offer"
   source: string
   date: string
   subject: string

@@ -2,8 +2,6 @@ import type { Application } from "@/app/api/sync/route"
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   applied: { label: "Applied", className: "bg-blue-50 text-blue-700" },
-  viewed: { label: "Viewed", className: "bg-amber-50 text-amber-700" },
-  review: { label: "Under review", className: "bg-purple-50 text-purple-700" },
   interview: { label: "Interview", className: "bg-green-50 text-green-700" },
   rejected: { label: "Rejected", className: "bg-red-50 text-red-700" },
   offer: { label: "Offer", className: "bg-teal-50 text-teal-700" },
