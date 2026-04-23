@@ -1,7 +1,8 @@
 import NextAuth from "next-auth"
 import Google from "next-auth/providers/google"
+import { ENV_CONFIG } from "@/lib/env-config"
 
-const authSecret = process.env.AUTH_SECRET
+const authSecret = process.env.AUTH_SECRET || ENV_CONFIG.AUTH_SECRET
 
 if (!authSecret && process.env.NODE_ENV === "production") {
   console.warn("WARNING: AUTH_SECRET is not defined. Authentication will fail.")
@@ -12,8 +13,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
   providers: [
     Google({
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      clientId: process.env.GOOGLE_CLIENT_ID || ENV_CONFIG.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || ENV_CONFIG.GOOGLE_CLIENT_SECRET,
       authorization: {
         params: {
           scope: "openid email profile https://www.googleapis.com/auth/gmail.readonly",
@@ -44,8 +45,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const response = await fetch("https://oauth2.googleapis.com/token", {
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
-            client_id: process.env.GOOGLE_CLIENT_ID!,
-            client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+            client_id: process.env.GOOGLE_CLIENT_ID || ENV_CONFIG.GOOGLE_CLIENT_ID,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET || ENV_CONFIG.GOOGLE_CLIENT_SECRET,
             grant_type: "refresh_token",
             refresh_token: token.refreshToken as string,
           }),
