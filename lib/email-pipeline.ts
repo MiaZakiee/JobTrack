@@ -48,3 +48,38 @@ export function cleanBody(text: string): string {
     .replace(/\s+/g, " ")
     .trim()
 }
+
+/**
+ * Extracts plain text body from Gmail message parts
+ */
+export function extractBody(payload: any): string {
+  if (!payload) return ""
+  
+  // 1. Check if the body itself has data (simple messages)
+  if (payload.body?.data) {
+    return Buffer.from(payload.body.data, "base64").toString("utf-8")
+  }
+
+  // 2. Recursive search in parts
+  if (payload.parts) {
+    // Prefer text/plain over text/html
+    const plainTextPart = payload.parts.find((p: any) => p.mimeType === "text/plain")
+    if (plainTextPart?.body?.data) {
+      return Buffer.from(plainTextPart.body.data, "base64").toString("utf-8")
+    }
+
+    const htmlPart = payload.parts.find((p: any) => p.mimeType === "text/html")
+    if (htmlPart?.body?.data) {
+      return cleanBody(Buffer.from(htmlPart.body.data, "base64").toString("utf-8"))
+    }
+
+    // Deep search in nested parts (multipart/alternative, etc)
+    for (const part of payload.parts) {
+      const body = extractBody(part)
+      if (body) return body
+    }
+  }
+
+  return ""
+}
+

@@ -2,6 +2,9 @@ import { NextResponse } from "next/server"
 import { auth } from "@/auth"
 import { google } from "googleapis"
 import { GoogleGenerativeAI } from "@google/generative-ai"
+import { getSenderScore, isKnownAdSender } from "@/lib/sender-registry"
+import { resolveFinalStatus, STATUS_KEYWORDS } from "@/lib/status-resolver"
+import { ThreadContext, MessageContent, extractBody, cleanBody, truncateBody } from "@/lib/email-pipeline"
 
 export interface Application {
   id: string
@@ -15,34 +18,32 @@ export interface Application {
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!)
 
-async function classifyThreadsBatch(threads: { id: string; subject: string; snippets: string[] }[]) {
+async function processPipelineBatch(threads: ThreadContext[]) {
   if (threads.length === 0) return []
 
-  const modelNames = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
-  ]
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.0-flash",
+    generationConfig: { responseMimeType: "application/json" }
+  })
 
   const prompt = `
     You are an expert job application tracker. Analyze the following ${threads.length} email threads and extract details for each.
     
-    For each thread, determine the "status". It MUST be exactly one of: "applied", "viewed", "review", "interview", "rejected", "offer", "junk".
+    CRITICAL: First determine if the thread is "junk". 
+    "junk" includes: mass marketing emails, weekly job alerts, "people are hiring" notifications, ads, newsletters, or generic platform updates.
     
-    CRITERIA:
-    - "junk": Use this for ads, newsletters, marketing, promotional emails, or anything NOT related to a specific job application you made. If it looks like a mass email from LinkedIn or Indeed about "jobs you might like", it is JUNK.
-    - "offer": Contains "congratulations", "job offer", "offer letter", "we are pleased to offer", "onboarding".
-    - "rejected": Contains "unable to offer", "not moving forward", "not selected", "unfortunately", "thank you for your interest", "will not be proceeding".
-    - "interview": Invitation to interview, schedule a chat, interview confirmation, calendar invite, "next steps" involving a meeting, technical test, assessment, or specific availability request. Look for mentions of "Zoom", "Google Meet", "Teams", or "Calendly".
-    - "review": Specifically says the application is "under review" or "moving to the next stage".
-    - "viewed": Explicitly says "employer viewed your application".
-    - "applied": Application confirmations, "received your application", "thank you for applying".
-    
-    Also extract:
-    - "company": Name of the company.
+    If NOT junk, extract the following:
+    - "status": MUST be one of: "applied", "interview", "rejected", "offer", "junk".
+    - "company": Name of the hiring company.
     - "role": Job title (e.g., "Software Engineer").
+    
+    STATUS LOGIC:
+    - "offer": Official job offer, congratulations, or onboarding steps.
+    - "rejected": Explicitly stating they are not moving forward or you weren't selected.
+    - "interview": Any mention of scheduling, video calls, Zoom, Calendly, or "next steps" that involve a meeting.
+    - "applied": Application confirmations or acknowledgement of receipt.
+    
+    IMPORTANT: Base the "status" on the LATEST message in the thread.
     
     Return a JSON array of objects with keys: "id", "status", "company", "role".
     
@@ -50,137 +51,36 @@ async function classifyThreadsBatch(threads: { id: string; subject: string; snip
     ${threads.map((t) => `
     ID: ${t.id}
     Subject: ${t.subject}
-    Snippets:
-    ${t.snippets.map((s, j) => `  ${j + 1}. ${s}`).join("\n")}
+    Sender: ${t.sender}
+    Messages (Oldest to Newest):
+    ${t.messages.map((m, j) => `  ${j + 1}. [${m.date}] ${m.body}`).join("\n")}
     `).join("\n---")}
   `
 
-  for (const modelName of modelNames) {
-    try {
-      console.log(`[Sync] Attempting classification with ${modelName}...`)
-      const currentModel = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig: { responseMimeType: "application/json" }
-      })
-
-      const result = await currentModel.generateContent(prompt)
-      const response = await result.response
-      const text = response.text()
-
-      try {
-        const parsed = JSON.parse(text)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          console.log(`[Sync] Successfully classified ${parsed.length} threads with ${modelName}`)
-          return parsed
-        }
-      } catch (parseError) {
-        console.warn(`[Sync] JSON parse error with ${modelName}. Attempting regex fallback...`)
-        const jsonMatch = text.match(/\[\s*\{[\s\S]*\}\s*\]/)
-        if (jsonMatch) {
-          const extractedJson = JSON.parse(jsonMatch[0])
-          console.log(`[Sync] Successfully extracted ${extractedJson.length} threads via regex from ${modelName}`)
-          return extractedJson
-        }
-      }
-    } catch (error: any) {
-      console.warn(`[Sync] Model ${modelName} failed:`, error.message || error)
-      continue
-    }
+  try {
+    const result = await model.generateContent(prompt)
+    const response = await result.response
+    const text = response.text()
+    const parsed = JSON.parse(text)
+    return Array.isArray(parsed) ? parsed : []
+  } catch (error) {
+    console.error("[Pipeline] Batch processing failed:", error)
+    return []
   }
-
-  console.error("[Sync] All Gemini models failed to classify batch")
-  return []
 }
 
 function detectSource(sender: string): string {
-  if (/linkedin/i.test(sender)) return "LinkedIn"
-  if (/indeed/i.test(sender)) return "Indeed"
-  if (/jobstreet/i.test(sender)) return "Jobstreet"
-  if (/workday/i.test(sender)) return "Workday"
-  if (/greenhouse/i.test(sender)) return "Greenhouse"
-  if (/smartrecruiters/i.test(sender)) return "SmartRecruiters"
-  if (/recruitee/i.test(sender)) return "Recruitee"
-  if (/talentlyft/i.test(sender)) return "TalentLyft"
+  const s = sender.toLowerCase()
+  if (s.includes("linkedin")) return "LinkedIn"
+  if (s.includes("indeed")) return "Indeed"
+  if (s.includes("jobstreet")) return "Jobstreet"
+  if (s.includes("workday")) return "Workday"
+  if (s.includes("greenhouse")) return "Greenhouse"
+  if (s.includes("lever.co")) return "Lever"
+  if (s.includes("smartrecruiters")) return "SmartRecruiters"
+  if (s.includes("recruitee")) return "Recruitee"
+  if (s.includes("ashby")) return "Ashby"
   return "Direct"
-}
-
-function fallbackExtraction(subject: string): { company: string; role: string; status: Application["status"] | "junk" } {
-  let company = "Unknown"
-  let role = "Software Engineer"
-  let status: Application["status"] | "junk" = "applied"
-
-  const s = subject.toLowerCase()
-  
-  // Junk detection in subject
-  const junkKeywords = ["job alert", "recommended for you", "hiring now", "new jobs", "weekly digest", "top picks", "invitation to join"]
-  if (junkKeywords.some(k => s.includes(k))) {
-    status = "junk"
-  }
-
-  if (s.includes("interview") || s.includes("chat") || s.includes("next steps") || s.includes("booked") || s.includes("availability") || s.includes("invitation to") || s.includes("meeting")) {
-    status = "interview"
-  } else if (s.includes("offer") || s.includes("congratulations")) {
-    status = "offer"
-  } else if (s.includes("unfortunately") || s.includes("not selected") || s.includes("moving forward") || s.includes("thank you for your interest")) {
-    status = "rejected"
-  }
-
-  // Role extraction first
-  const rolePatterns = [
-    /for ([\w\s&.+-]+) at/i,
-    /for ([\w\s&.+-]+) application/i,
-    /as ([\w\s&.+-]+)/i,
-    /Indeed Application:\s*([\w\s&.+-]+)/i,
-    /Application:\s*([\w\s&.+-]+)/i,
-  ]
-
-  for (const pattern of rolePatterns) {
-    const match = subject.match(pattern)
-    if (match && match[1]) {
-      role = match[1].trim()
-      break
-    }
-  }
-
-  // Company extraction
-  const companyPatterns = [
-    /with ([\w\s&.]+)!/i,
-    /sent to ([\w\s&.]+)/i,
-    /from ([\w\s&.]+)/i,
-    /at ([\w\s&.]+)/i,
-    /application with ([\w\s&.]+)/i,
-    /Applying to ([\w\s&.]+)/i,
-    /viewed by ([\w\s&.]+)/i,
-    /^([^-\n]+)\s*-\s*Application/i,
-  ]
-
-  for (const pattern of companyPatterns) {
-    const match = subject.match(pattern)
-    if (match && match[1]) {
-      const candidate = match[1].trim()
-      if (candidate.toLowerCase() !== role.toLowerCase() && candidate.length > 2) {
-        company = candidate
-        break
-      }
-    }
-  }
-
-  if (subject.includes("Indeed Application:")) {
-    const parts = subject.split("Indeed Application:")[1].split("-")
-    if (parts.length > 1) {
-      company = parts[parts.length - 1].trim()
-    } else if (company === "Unknown") {
-      company = "Indeed"
-    }
-  }
-
-  if (company === "Unknown" && subject.toLowerCase().includes("thank you for applying")) {
-    company = "Career Opportunity"
-  }
-
-  if (company.length > 50) company = company.substring(0, 50)
-
-  return { company, role, status }
 }
 
 export async function GET(request: Request) {
@@ -201,96 +101,97 @@ export async function GET(request: Request) {
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client })
 
-    const query = `(application OR interview OR offer OR "thank you for applying" OR "received your" OR "moving forward" OR "not selected" OR "your application" OR confirmation OR received OR "next steps" OR schedule OR "video call" OR zoom OR calendly OR invitation) -category:promotions -category:social after:${after}`
+    // Targeted queries to reduce noise
+    const queries = [
+      `from:(greenhouse.io OR workday.com OR smartrecruiters.com OR lever.co OR ashbyhq.com OR breezy.hr) application after:${after}`,
+      `("interview" OR "schedule" OR "video call" OR "zoom" OR "google meet" OR "calendly" OR "availability") ("application" OR "role" OR "position" OR "opportunity") -category:promotions after:${after}`,
+      `("unfortunately" OR "not selected" OR "not moving forward" OR "thank you for your interest") ("application" OR "position") after:${after}`,
+      `("offer letter" OR "congratulations" OR "pleased to offer" OR "onboarding") after:${after}`,
+      `("thank you for applying" OR "received your application") after:${after}`
+    ]
 
-    const threadsRes = await gmail.users.threads.list({
-      userId: "me",
-      q: query,
-      maxResults: 500,
-    })
-
-    const gmailThreads = threadsRes.data.threads || []
-    const threadDetails = []
-
-    for (const thread of gmailThreads) {
-      const threadData = await gmail.users.threads.get({
-        userId: "me",
-        id: thread.id!,
-        format: "metadata",
-        metadataHeaders: ["Subject", "From", "Date"],
-      })
-
-      const messages = threadData.data.messages || []
-      const subject = messages[0]?.payload?.headers?.find(h => h.name === "Subject")?.value || "No Subject"
-      const date = messages[0]?.payload?.headers?.find(h => h.name === "Date")?.value || ""
-      const sender = messages[0]?.payload?.headers?.find(h => h.name === "From")?.value || ""
-      const snippets = messages.map(m => m.snippet || "").filter(Boolean)
-
-      threadDetails.push({
-        id: thread.id!,
-        subject,
-        date: new Date(date).toISOString(),
-        source: detectSource(sender),
-        snippets
-      })
+    const allThreadIds = new Set<string>()
+    for (const q of queries) {
+      const res = await gmail.users.threads.list({ userId: "me", q, maxResults: 100 })
+      res.data.threads?.forEach(t => t.id && allThreadIds.add(t.id))
     }
 
-    // Batch classify with Gemini (max 25 per batch to be safe)
-    const BATCH_SIZE = 25
-    const results: { id: string; status: Application["status"]; company: string; role: string }[] = []
-    for (let i = 0; i < threadDetails.length; i += BATCH_SIZE) {
-      const batch = threadDetails.slice(i, i + BATCH_SIZE)
-      const classifications = await classifyThreadsBatch(batch)
+    const threadDetails: ThreadContext[] = []
+
+    for (const threadId of Array.from(allThreadIds)) {
+      try {
+        const threadData = await gmail.users.threads.get({
+          userId: "me",
+          id: threadId,
+          format: "full",
+        })
+
+        const messages = threadData.data.messages || []
+        if (messages.length === 0) continue
+
+        const firstMsg = messages[0]
+        const subject = firstMsg.payload?.headers?.find(h => h.name === "Subject")?.value || "No Subject"
+        const sender = firstMsg.payload?.headers?.find(h => h.name === "From")?.value || ""
+        const date = firstMsg.payload?.headers?.find(h => h.name === "Date")?.value || ""
+
+        const processedMessages: MessageContent[] = messages.map(m => ({
+          id: m.id!,
+          date: new Date(m.payload?.headers?.find(h => h.name === "Date")?.value || "").toISOString(),
+          sender: m.payload?.headers?.find(h => h.name === "From")?.value || "",
+          body: truncateBody(cleanBody(extractBody(m.payload))),
+          snippet: m.snippet || ""
+        }))
+
+        const score = getSenderScore(sender)
+
+        threadDetails.push({
+          id: threadId,
+          subject,
+          sender,
+          date: new Date(date).toISOString(),
+          messages: processedMessages,
+          score
+        })
+      } catch (err) {
+        console.warn(`[Sync] Failed to fetch thread ${threadId}:`, err)
+      }
+    }
+
+    const filteredThreads = threadDetails.filter(t => {
+      if (t.score >= 2) return true
+      if (t.score < -2) return false
+      const s = t.subject.toLowerCase()
+      const hasJobKeyword = /application|interview|offer|rejected|opportunity|role|position/.test(s)
+      const hasAdKeyword = /job alert|recommended|weekly digest|hiring now/.test(s)
+      return hasJobKeyword && !hasAdKeyword
+    })
+
+    // Batch classify with Gemini
+    const BATCH_SIZE = 15 // Smaller batches for full body context
+    const results: { id: string; status: Application["status"] | "junk"; company: string; role: string }[] = []
+    
+    for (let i = 0; i < filteredThreads.length; i += BATCH_SIZE) {
+      const batch = filteredThreads.slice(i, i + BATCH_SIZE)
+      const classifications = await processPipelineBatch(batch)
       results.push(...classifications)
     }
 
-    const applications: Application[] = threadDetails.map(t => {
+    const applications: Application[] = filteredThreads.map(t => {
       const classification = results.find(r => r.id === t.id)
-
-      if (classification?.status === "junk") return null
-
-      let company = classification?.company || "Unknown"
-      let role = classification?.role || "Software Engineer"
-      let status: Application["status"] | "junk" = (classification?.status as Application["status"]) || "applied"
-
-      // Fallback if Gemini failed or company is unknown
-      if (company === "Unknown" || company === "") {
-        const fallback = fallbackExtraction(t.subject)
-        company = fallback.company
-        role = fallback.role
-        if (!classification || classification.status === "applied") {
-          status = fallback.status
-        }
-      }
-
-      if (status === "junk") return null
-
-      // Final ad check on company name and subject
-      const adKeywords = ["linkedin", "indeed", "job alert", "career opportunity", "hiring now", "weekly digest", "recommended for you"]
-      const isAd = adKeywords.some(k => company.toLowerCase().includes(k) || t.subject.toLowerCase().includes(k))
-      
-      if (isAd && status === "applied") {
-        return null
-      }
+      if (!classification || classification.status === "junk") return null
 
       return {
         id: t.id,
-        company,
-        role,
-        status: status as Application["status"],
-        source: t.source,
+        company: classification.company,
+        role: classification.role,
+        status: classification.status as Application["status"],
+        source: detectSource(t.sender),
         date: t.date,
         subject: t.subject
       }
-    }).filter((app): app is Application => {
-      if (!app) return false
-      const isKnown = app.company !== "Unknown" && app.company !== ""
-      return isKnown
-    })
+    }).filter((app): app is Application => !!app && app.company !== "Unknown")
 
-    // Keep unique by thread ID (to avoid duplicates from Gmail list, though list should be unique)
     const uniqueApps = Array.from(new Map(applications.map(a => [a.id, a])).values())
-
     uniqueApps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
 
     return NextResponse.json({ applications: uniqueApps, total: uniqueApps.length })
