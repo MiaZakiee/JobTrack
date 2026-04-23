@@ -243,7 +243,7 @@ export default function Dashboard() {
 
         <SyncStatus message={syncMessage} count={apps.length} loading={loading} />
 
-        <StatsBar apps={apps} />
+        <StatsBar apps={apps} filterStatus={filterStatus} onFilterChange={setFilterStatus} />
 
         <div className="bg-[#111] rounded-2xl sm:rounded-3xl border border-zinc-800 shadow-xl shadow-black/40 overflow-hidden mt-6 sm:mt-8">
           <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-zinc-800 flex flex-col sm:flex-row flex-wrap gap-3 sm:gap-4 items-stretch sm:items-center bg-[#111]">
