@@ -26,7 +26,14 @@ export default function Home() {
           <span className="font-semibold text-white">JobTracker</span>
         </div>
         <button
-          onClick={() => signIn("google")}
+          onClick={async () => {
+            console.log("Nav sign in button clicked")
+            try {
+              await signIn("google")
+            } catch (error) {
+              console.error("Nav sign in error:", error)
+            }
+          }}
           className="text-sm text-zinc-400 hover:text-white font-medium"
         >
           Sign in
@@ -47,7 +54,15 @@ export default function Home() {
         </p>
 
         <button
-          onClick={() => signIn("google")}
+          onClick={async () => {
+            console.log("Sign in button clicked")
+            try {
+              const result = await signIn("google")
+              console.log("Sign in result:", result)
+            } catch (error) {
+              console.error("Sign in error:", error)
+            }
+          }}
           className="flex items-center gap-3 bg-black border border-zinc-700 rounded-xl px-6 py-3.5 text-sm font-medium text-white hover:bg-zinc-900 hover:border-zinc-600 transition-all shadow-sm"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -58,6 +73,13 @@ export default function Home() {
           </svg>
           Continue with Google
         </button>
+
+        {typeof window !== "undefined" && new URLSearchParams(window.location.search).get("error") && (
+          <p className="text-xs text-red-500 mt-4 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
+            Authentication error: {new URLSearchParams(window.location.search).get("error")}. 
+            Please check your environment variables.
+          </p>
+        )}
 
         <p className="text-xs text-zinc-500 mt-4">
           We only request read-only Gmail access. Your emails never leave your browser session.

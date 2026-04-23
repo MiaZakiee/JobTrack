@@ -1,8 +1,14 @@
 import NextAuth from "next-auth"
 import Google from "next-auth/providers/google"
 
+const authSecret = process.env.AUTH_SECRET
+
+if (!authSecret && process.env.NODE_ENV === "production") {
+  console.warn("WARNING: AUTH_SECRET is not defined. Authentication will fail.")
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  secret: process.env.AUTH_SECRET,
+  secret: authSecret,
   trustHost: true,
   providers: [
     Google({
