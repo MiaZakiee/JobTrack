@@ -1,6 +1,7 @@
 "use client"
 import { useSession, signOut } from "next-auth/react"
 import { useState, useEffect, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { RefreshCw, LogOut, Zap, Download, Loader2 } from "lucide-react"
 import type { Application } from "@/app/api/sync/route"
 import StatsBar from "./StatsBar"
@@ -14,7 +15,8 @@ import OnboardScreen from "./OnboardScreen"
 import SyncStatus from "./SyncStatus"
 
 export default function Dashboard() {
-  const { data: session } = useSession()
+  const { data: session, status } = useSession()
+  const router = useRouter()
   const [apps, setApps] = useState<Application[]>([])
   const [loading, setLoading] = useState(false)
   const [onboarded, setOnboarded] = useState<boolean | null>(null)
@@ -138,6 +140,12 @@ export default function Dashboard() {
       }
     }
   }, [handleSync])
+
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/")
+    }
+  }, [status, router])
 
   const handleExport = () => {
     const headers = ["Company", "Role", "Status", "Source", "Date"]

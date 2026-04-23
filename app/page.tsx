@@ -14,7 +14,7 @@ export default function Home() {
     )
   }
 
-  if (session) return <Dashboard />
+  if (status === "authenticated" && session?.user) return <Dashboard />
 
   return (
     <main className="min-h-screen bg-[#0a0a0a] flex flex-col">
