@@ -16,15 +16,26 @@ export interface Application {
   subject: string
 }
 
+import { OpenAI } from "openai"
+
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!)
+
+// Groq client (OpenAI compatible)
+const groq = process.env.GROQ_API_KEY 
+  ? new OpenAI({ 
+      apiKey: process.env.GROQ_API_KEY, 
+      baseURL: "https://api.groq.com/openai/v1" 
+    }) 
+  : null
 
 async function processPipelineBatch(threads: ThreadContext[]) {
   if (threads.length === 0) return []
 
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    generationConfig: { responseMimeType: "application/json" }
-  })
+  const modelNames = [
+    "models/gemini-2.0-flash",
+    "models/gemini-1.5-flash",
+    "models/gemini-1.5-pro",
+  ]
 
   const prompt = `
     You are an expert job application tracker. Analyze the following ${threads.length} email threads and extract details for each.
@@ -57,16 +68,106 @@ async function processPipelineBatch(threads: ThreadContext[]) {
     `).join("\n---")}
   `
 
-  try {
-    const result = await model.generateContent(prompt)
-    const response = await result.response
-    const text = response.text()
-    const parsed = JSON.parse(text)
-    return Array.isArray(parsed) ? parsed : []
-  } catch (error) {
-    console.error("[Pipeline] Batch processing failed:", error)
-    return []
+  // 1. Try Groq first (it's much faster)
+  if (groq) {
+    try {
+      console.log("[Pipeline] Attempting with Groq (Llama 3)...")
+      const response = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" }
+      })
+      
+      const content = response.choices[0].message.content
+      if (content) {
+        const parsed = JSON.parse(content)
+        const results = Array.isArray(parsed) ? parsed : (parsed.threads || Object.values(parsed)[0])
+        if (Array.isArray(results)) return results
+      }
+    } catch (error) {
+      console.warn("[Pipeline] Groq failed, falling back to Gemini:", error)
+    }
   }
+
+  // 2. Try Gemini Models as secondary
+  for (const modelName of modelNames) {
+    try {
+      console.log(`[Pipeline] Attempting with Gemini ${modelName}...`)
+      const currentModel = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: { responseMimeType: "application/json" }
+      })
+
+      const result = await currentModel.generateContent(prompt)
+      const response = await result.response
+      const text = response.text()
+      const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim()
+      const parsed = JSON.parse(cleaned)
+      if (Array.isArray(parsed)) return parsed
+    } catch (error: any) {
+      console.warn(`[Pipeline] Gemini ${modelName} failed:`, error.message || error)
+      if (error.status === 429 || error.status === 404) continue 
+    }
+  }
+
+  // 3. Final Local Fallback
+  console.warn("[Pipeline] All AI models failed. Using local fallback extraction...")
+  return threads.map(t => {
+    const fallback = localFallback(t)
+    return {
+      id: t.id,
+      status: fallback.status,
+      company: fallback.company,
+      role: fallback.role
+    }
+  })
+}
+
+function localFallback(thread: ThreadContext): { company: string; role: string; status: Application["status"] | "junk" } {
+  const subject = thread.subject.toLowerCase()
+  const latestMessage = thread.messages[thread.messages.length - 1]?.body.toLowerCase() || ""
+  const combined = `${subject} ${latestMessage}`
+
+  let status: Application["status"] | "junk" = "applied"
+  
+  if (STATUS_KEYWORDS.offer.some(k => combined.includes(k))) status = "offer"
+  else if (STATUS_KEYWORDS.rejected.some(k => combined.includes(k))) status = "rejected"
+  else if (STATUS_KEYWORDS.interview.some(k => combined.includes(k))) status = "interview"
+  
+  // Improved company extraction
+  let company = "Unknown"
+  const atMatch = thread.subject.match(/at ([\w\s&.-]+)/i)
+  if (atMatch) company = atMatch[1].trim()
+  
+  if (company === "Unknown") {
+    const dashMatch = thread.subject.match(/^([\w\s&.-]+) -/i)
+    if (dashMatch) company = dashMatch[1].trim()
+  }
+
+  if (company === "Unknown") {
+    if (thread.sender.includes("greenhouse")) company = "ATS (Greenhouse)"
+    if (thread.sender.includes("workday")) company = "ATS (Workday)"
+  }
+
+  // Improved role extraction
+  let role = "Software Engineer"
+  const forMatch = thread.subject.match(/for ([\w\s&.-]+) at/i) || thread.subject.match(/for ([\w\s&.-]+) application/i)
+  if (forMatch) role = forMatch[1].trim()
+  else {
+    const commonRoles = ["frontend", "backend", "fullstack", "full stack", "developer", "engineer", "designer", "manager"]
+    for (const r of commonRoles) {
+      if (subject.includes(r)) {
+        role = r.charAt(0).toUpperCase() + r.slice(1) + " Engineer"
+        break
+      }
+    }
+  }
+
+  // Final cleanup
+  company = company.replace(/application|update|status|role|position/gi, "").trim()
+  role = role.replace(/application|update|status/gi, "").trim()
+
+  return { company, role, status }
 }
 
 function detectSource(sender: string): string {
@@ -166,8 +267,8 @@ export async function GET(request: Request) {
       return hasJobKeyword && !hasAdKeyword
     })
 
-    // Batch classify with Gemini
-    const BATCH_SIZE = 15 // Smaller batches for full body context
+    // Batch classify with Gemini or Groq
+    const BATCH_SIZE = 10 // Reduced to 10 for better token management on Groq
     const results: { id: string; status: Application["status"] | "junk"; company: string; role: string }[] = []
     
     for (let i = 0; i < filteredThreads.length; i += BATCH_SIZE) {
