@@ -14,13 +14,16 @@ export interface Application {
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!)
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash",
-  generationConfig: { responseMimeType: "application/json" }
-})
 
 async function classifyThreadsBatch(threads: { id: string; subject: string; snippets: string[] }[]) {
   if (threads.length === 0) return []
+
+  const modelNames = [
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro",
+    "gemini-pro"
+  ]
 
   const prompt = `
     You are an expert job application tracker. Analyze the following ${threads.length} email threads and extract details for each.
@@ -28,13 +31,13 @@ async function classifyThreadsBatch(threads: { id: string; subject: string; snip
     For each thread, determine:
     1. status: Must be exactly one of: "applied", "viewed", "review", "interview", "rejected", "offer".
        - "offer": Explicit job offer or "congratulations".
-       - "rejected": "unable to offer", "not moving forward", "not selected", "unfortunately", etc.
-       - "interview": Invitation to chat, schedule a call, or interview confirmation.
-       - "review": "under review", "reviewing your application".
+       - "rejected": "unable to offer", "not moving forward", "not selected", "unfortunately", "thank you for your interest but", etc.
+       - "interview": Invitation to chat, schedule a call, interview confirmation, or "next steps".
+       - "review": "under review", "reviewing your application", or "status update".
        - "viewed": "employer viewed your application".
-       - "applied": Initial application receipt.
-    2. company: The name of the company.
-    3. role: The job title (e.g., "Software Engineer").
+       - "applied": Initial application receipt or confirmation.
+    2. company: The name of the company. Look at the Subject, Sender, and Snippets. If you can't find it, use "Unknown".
+    3. role: The job title (e.g., "Software Engineer"). If not specified, use "Software Engineer" as a default if it seems like a tech job.
     
     Return a JSON array of objects with keys: "id", "status", "company", "role".
     
@@ -47,14 +50,40 @@ async function classifyThreadsBatch(threads: { id: string; subject: string; snip
     `).join("\n---")}
   `
 
-  try {
-    const result = await model.generateContent(prompt)
-    const response = await result.response
-    return JSON.parse(response.text())
-  } catch (error) {
-    console.error("Gemini classification error:", error)
-    return []
+  for (const modelName of modelNames) {
+    try {
+      const currentModel = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: { responseMimeType: "application/json" }
+      })
+
+      const result = await currentModel.generateContent(prompt)
+      const response = await result.response
+      const text = response.text()
+
+      try {
+        const parsed = JSON.parse(text)
+        return parsed
+      } catch (parseError) {
+        console.error(`Gemini JSON parse error with ${modelName}. Raw response:`, text)
+        const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/)
+        if (jsonMatch) {
+          return JSON.parse(jsonMatch[1])
+        }
+      }
+    } catch (error: any) {
+      console.warn(`Model ${modelName} failed:`, error.message || error)
+      // If it's a 404, we continue to the next model
+      if (error.status === 404 || error.message?.includes("404")) {
+        continue
+      }
+      // If it's something else (like quota), we might want to stop, but for now we continue
+      continue
+    }
   }
+
+  console.error("All Gemini models failed to classify batch")
+  return []
 }
 
 function detectSource(sender: string): string {
@@ -67,6 +96,70 @@ function detectSource(sender: string): string {
   if (/recruitee/i.test(sender)) return "Recruitee"
   if (/talentlyft/i.test(sender)) return "TalentLyft"
   return "Direct"
+}
+
+function fallbackExtraction(subject: string): { company: string; role: string } {
+  let company = "Unknown"
+  let role = "Software Engineer"
+
+  // Role extraction first
+  const rolePatterns = [
+    /for ([\w\s&.+-]+) at/i,
+    /for ([\w\s&.+-]+) application/i,
+    /as ([\w\s&.+-]+)/i,
+    /Indeed Application:\s*([\w\s&.+-]+)/i,
+    /Application:\s*([\w\s&.+-]+)/i,
+  ]
+
+  for (const pattern of rolePatterns) {
+    const match = subject.match(pattern)
+    if (match && match[1]) {
+      role = match[1].trim()
+      break
+    }
+  }
+
+  // Company extraction
+  const companyPatterns = [
+    /with ([\w\s&.]+)!/i,
+    /sent to ([\w\s&.]+)/i,
+    /from ([\w\s&.]+)/i,
+    /at ([\w\s&.]+)/i,
+    /application with ([\w\s&.]+)/i,
+    /Applying to ([\w\s&.]+)/i,
+    /viewed by ([\w\s&.]+)/i,
+    /^([^-\n]+)\s*-\s*Application/i, // "Company - Application Received"
+  ]
+
+  for (const pattern of companyPatterns) {
+    const match = subject.match(pattern)
+    if (match && match[1]) {
+      const candidate = match[1].trim()
+      if (candidate.toLowerCase() !== role.toLowerCase() && candidate.length > 2) {
+        company = candidate
+        break
+      }
+    }
+  }
+
+  // Special case for Indeed
+  if (subject.includes("Indeed Application:")) {
+    const parts = subject.split("Indeed Application:")[1].split("-")
+    if (parts.length > 1) {
+      company = parts[parts.length - 1].trim()
+    } else if (company === "Unknown") {
+      company = "Indeed"
+    }
+  }
+
+  // Fallback for "Thank you for applying" without company name
+  if (company === "Unknown" && subject.toLowerCase().includes("thank you for applying")) {
+    company = "Career Opportunity"
+  }
+
+  if (company.length > 50) company = company.substring(0, 50)
+
+  return { company, role }
 }
 
 export async function GET(request: Request) {
@@ -87,12 +180,12 @@ export async function GET(request: Request) {
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client })
 
-    const query = `(subject:application OR subject:applied OR subject:interview OR subject:offer OR "thank you for applying" OR "your application" OR "application was sent" OR "application was viewed") after:${after}`
+    const query = `(application OR interview OR offer OR "thank you for applying" OR "received your" OR "moving forward" OR "not selected" OR "your application" OR confirmation OR received) after:${after}`
 
     const threadsRes = await gmail.users.threads.list({
       userId: "me",
       q: query,
-      maxResults: 50,
+      maxResults: 200,
     })
 
     const gmailThreads = threadsRes.data.threads || []
@@ -132,19 +225,33 @@ export async function GET(request: Request) {
 
     const applications: Application[] = threadDetails.map(t => {
       const classification = results.find(r => r.id === t.id)
+
+      let company = classification?.company || "Unknown"
+      let role = classification?.role || "Software Engineer"
+
+      // Fallback if Gemini failed or company is unknown
+      if (company === "Unknown" || company === "") {
+        const fallback = fallbackExtraction(t.subject)
+        company = fallback.company
+        role = fallback.role
+      }
+
       return {
         id: t.id,
-        company: classification?.company || "Unknown",
-        role: classification?.role || "Software Engineer",
+        company,
+        role,
         status: classification?.status || "applied",
         source: t.source,
         date: t.date,
         subject: t.subject
       }
-    }).filter(app => app.company !== "Unknown")
+    }).filter(app => {
+      const isKnown = app.company !== "Unknown" && app.company !== ""
+      return isKnown
+    })
 
-    // Remove duplicates (same company + role)
-    const uniqueApps = Array.from(new Map(applications.map(a => [`${a.company.toLowerCase()}|${a.role.toLowerCase()}`, a])).values())
+    // Keep unique by thread ID (to avoid duplicates from Gmail list, though list should be unique)
+    const uniqueApps = Array.from(new Map(applications.map(a => [a.id, a])).values())
 
     uniqueApps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
 

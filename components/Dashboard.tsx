@@ -23,7 +23,7 @@ export default function Dashboard() {
     setLoading(true)
     setError("")
     try {
-      const res = await fetch("/api/sync?after=2026/03/01")
+      const res = await fetch("/api/sync?after=2026/01/01")
       if (!res.ok) throw new Error("Sync failed")
       const data = await res.json()
       setApps(data.applications)
