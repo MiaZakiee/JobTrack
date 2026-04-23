@@ -19,39 +19,45 @@ async function classifyThreadsBatch(threads: { id: string; subject: string; snip
   if (threads.length === 0) return []
 
   const modelNames = [
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-001",
-    "gemini-1.5-pro",
-    "gemini-pro"
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
   ]
 
   const prompt = `
     You are an expert job application tracker. Analyze the following ${threads.length} email threads and extract details for each.
     
-    For each thread, determine:
-    1. status: Must be exactly one of: "applied", "viewed", "review", "interview", "rejected", "offer".
-       - "offer": Explicit job offer or "congratulations".
-       - "rejected": "unable to offer", "not moving forward", "not selected", "unfortunately", "thank you for your interest but", etc.
-       - "interview": Invitation to chat, schedule a call, interview confirmation, or "next steps".
-       - "review": "under review", "reviewing your application", or "status update".
-       - "viewed": "employer viewed your application".
-       - "applied": Initial application receipt or confirmation.
-    2. company: The name of the company. Look at the Subject, Sender, and Snippets. If you can't find it, use "Unknown".
-    3. role: The job title (e.g., "Software Engineer"). If not specified, use "Software Engineer" as a default if it seems like a tech job.
+    For each thread, determine the "status". It MUST be exactly one of: "applied", "viewed", "review", "interview", "rejected", "offer", "junk".
+    
+    CRITERIA:
+    - "junk": Use this for ads, newsletters, marketing, promotional emails, or anything NOT related to a specific job application you made. If it looks like a mass email from LinkedIn or Indeed about "jobs you might like", it is JUNK.
+    - "offer": Contains "congratulations", "job offer", "offer letter", "we are pleased to offer", "onboarding".
+    - "rejected": Contains "unable to offer", "not moving forward", "not selected", "unfortunately", "thank you for your interest", "will not be proceeding".
+    - "interview": Invitation to interview, schedule a chat, interview confirmation, calendar invite, "next steps" involving a meeting, technical test, assessment, or specific availability request. Look for mentions of "Zoom", "Google Meet", "Teams", or "Calendly".
+    - "review": Specifically says the application is "under review" or "moving to the next stage".
+    - "viewed": Explicitly says "employer viewed your application".
+    - "applied": Application confirmations, "received your application", "thank you for applying".
+    
+    Also extract:
+    - "company": Name of the company.
+    - "role": Job title (e.g., "Software Engineer").
     
     Return a JSON array of objects with keys: "id", "status", "company", "role".
     
-    Threads:
+    Threads to analyze:
     ${threads.map((t) => `
     ID: ${t.id}
     Subject: ${t.subject}
-    Messages:
+    Snippets:
     ${t.snippets.map((s, j) => `  ${j + 1}. ${s}`).join("\n")}
     `).join("\n---")}
   `
 
   for (const modelName of modelNames) {
     try {
+      console.log(`[Sync] Attempting classification with ${modelName}...`)
       const currentModel = genAI.getGenerativeModel({
         model: modelName,
         generationConfig: { responseMimeType: "application/json" }
@@ -63,26 +69,26 @@ async function classifyThreadsBatch(threads: { id: string; subject: string; snip
 
       try {
         const parsed = JSON.parse(text)
-        return parsed
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          console.log(`[Sync] Successfully classified ${parsed.length} threads with ${modelName}`)
+          return parsed
+        }
       } catch (parseError) {
-        console.error(`Gemini JSON parse error with ${modelName}. Raw response:`, text)
-        const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/)
+        console.warn(`[Sync] JSON parse error with ${modelName}. Attempting regex fallback...`)
+        const jsonMatch = text.match(/\[\s*\{[\s\S]*\}\s*\]/)
         if (jsonMatch) {
-          return JSON.parse(jsonMatch[1])
+          const extractedJson = JSON.parse(jsonMatch[0])
+          console.log(`[Sync] Successfully extracted ${extractedJson.length} threads via regex from ${modelName}`)
+          return extractedJson
         }
       }
     } catch (error: any) {
-      console.warn(`Model ${modelName} failed:`, error.message || error)
-      // If it's a 404, we continue to the next model
-      if (error.status === 404 || error.message?.includes("404")) {
-        continue
-      }
-      // If it's something else (like quota), we might want to stop, but for now we continue
+      console.warn(`[Sync] Model ${modelName} failed:`, error.message || error)
       continue
     }
   }
 
-  console.error("All Gemini models failed to classify batch")
+  console.error("[Sync] All Gemini models failed to classify batch")
   return []
 }
 
@@ -98,9 +104,26 @@ function detectSource(sender: string): string {
   return "Direct"
 }
 
-function fallbackExtraction(subject: string): { company: string; role: string } {
+function fallbackExtraction(subject: string): { company: string; role: string; status: Application["status"] | "junk" } {
   let company = "Unknown"
   let role = "Software Engineer"
+  let status: Application["status"] | "junk" = "applied"
+
+  const s = subject.toLowerCase()
+  
+  // Junk detection in subject
+  const junkKeywords = ["job alert", "recommended for you", "hiring now", "new jobs", "weekly digest", "top picks", "invitation to join"]
+  if (junkKeywords.some(k => s.includes(k))) {
+    status = "junk"
+  }
+
+  if (s.includes("interview") || s.includes("chat") || s.includes("next steps") || s.includes("booked") || s.includes("availability") || s.includes("invitation to") || s.includes("meeting")) {
+    status = "interview"
+  } else if (s.includes("offer") || s.includes("congratulations")) {
+    status = "offer"
+  } else if (s.includes("unfortunately") || s.includes("not selected") || s.includes("moving forward") || s.includes("thank you for your interest")) {
+    status = "rejected"
+  }
 
   // Role extraction first
   const rolePatterns = [
@@ -128,7 +151,7 @@ function fallbackExtraction(subject: string): { company: string; role: string } 
     /application with ([\w\s&.]+)/i,
     /Applying to ([\w\s&.]+)/i,
     /viewed by ([\w\s&.]+)/i,
-    /^([^-\n]+)\s*-\s*Application/i, // "Company - Application Received"
+    /^([^-\n]+)\s*-\s*Application/i,
   ]
 
   for (const pattern of companyPatterns) {
@@ -142,7 +165,6 @@ function fallbackExtraction(subject: string): { company: string; role: string } 
     }
   }
 
-  // Special case for Indeed
   if (subject.includes("Indeed Application:")) {
     const parts = subject.split("Indeed Application:")[1].split("-")
     if (parts.length > 1) {
@@ -152,14 +174,13 @@ function fallbackExtraction(subject: string): { company: string; role: string } 
     }
   }
 
-  // Fallback for "Thank you for applying" without company name
   if (company === "Unknown" && subject.toLowerCase().includes("thank you for applying")) {
     company = "Career Opportunity"
   }
 
   if (company.length > 50) company = company.substring(0, 50)
 
-  return { company, role }
+  return { company, role, status }
 }
 
 export async function GET(request: Request) {
@@ -169,7 +190,7 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url)
-  const after = searchParams.get("after") || "2026/03/01"
+  const after = searchParams.get("after") || "2026/01/01"
 
   try {
     const oauth2Client = new google.auth.OAuth2(
@@ -180,12 +201,12 @@ export async function GET(request: Request) {
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client })
 
-    const query = `(application OR interview OR offer OR "thank you for applying" OR "received your" OR "moving forward" OR "not selected" OR "your application" OR confirmation OR received) after:${after}`
+    const query = `(application OR interview OR offer OR "thank you for applying" OR "received your" OR "moving forward" OR "not selected" OR "your application" OR confirmation OR received OR "next steps" OR schedule OR "video call" OR zoom OR calendly OR invitation) -category:promotions -category:social after:${after}`
 
     const threadsRes = await gmail.users.threads.list({
       userId: "me",
       q: query,
-      maxResults: 200,
+      maxResults: 500,
     })
 
     const gmailThreads = threadsRes.data.threads || []
@@ -226,26 +247,43 @@ export async function GET(request: Request) {
     const applications: Application[] = threadDetails.map(t => {
       const classification = results.find(r => r.id === t.id)
 
+      if (classification?.status === "junk") return null
+
       let company = classification?.company || "Unknown"
       let role = classification?.role || "Software Engineer"
+      let status: Application["status"] | "junk" = (classification?.status as Application["status"]) || "applied"
 
       // Fallback if Gemini failed or company is unknown
       if (company === "Unknown" || company === "") {
         const fallback = fallbackExtraction(t.subject)
         company = fallback.company
         role = fallback.role
+        if (!classification || classification.status === "applied") {
+          status = fallback.status
+        }
+      }
+
+      if (status === "junk") return null
+
+      // Final ad check on company name and subject
+      const adKeywords = ["linkedin", "indeed", "job alert", "career opportunity", "hiring now", "weekly digest", "recommended for you"]
+      const isAd = adKeywords.some(k => company.toLowerCase().includes(k) || t.subject.toLowerCase().includes(k))
+      
+      if (isAd && status === "applied") {
+        return null
       }
 
       return {
         id: t.id,
         company,
         role,
-        status: classification?.status || "applied",
+        status: status as Application["status"],
         source: t.source,
         date: t.date,
         subject: t.subject
       }
-    }).filter(app => {
+    }).filter((app): app is Application => {
+      if (!app) return false
       const isKnown = app.company !== "Unknown" && app.company !== ""
       return isKnown
     })

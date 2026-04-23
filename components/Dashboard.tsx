@@ -70,7 +70,7 @@ export default function Dashboard() {
 
   const filtered = apps.filter((a) => {
     if (search && !a.company.toLowerCase().includes(search.toLowerCase()) &&
-        !a.role.toLowerCase().includes(search.toLowerCase())) return false
+      !a.role.toLowerCase().includes(search.toLowerCase())) return false
     if (filterStatus && a.status !== filterStatus) return false
     if (filterSource && a.source !== filterSource) return false
     return true
