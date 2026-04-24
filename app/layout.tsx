@@ -7,6 +7,7 @@ import { auth } from "@/auth"
 const geist = Geist({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://jobtracker.ninocabiltes.dev"),
   title: "JobTracker",
   description: "Track job applications automatically from Gmail",
   keywords: [
@@ -32,6 +33,12 @@ export const metadata: Metadata = {
     ],
     locale: "en_US",
     type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "JobTracker",
+    description: "Track job applications automatically from Gmail",
+    images: ["/og-image.png"],
   },
 }
 
