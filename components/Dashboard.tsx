@@ -42,64 +42,84 @@ export default function Dashboard() {
         ? new Date(lastSync).toISOString().split("T")[0].replace(/-/g, "/")
         : onboardDate
 
-      const eventSource = new EventSource(`/api/sync?after=${afterDate}&mode=${isOnboarding ? "onboard" : "sync"}`)
-      
+      // 1. Start the sync job
+      const startRes = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ after: afterDate, mode: isOnboarding ? "onboard" : "sync" })
+      })
+
+      if (!startRes.ok) {
+        throw new Error(await startRes.text() || "Failed to start sync")
+      }
+
+      const { jobId } = await startRes.json()
       let currentApps = isOnboarding ? [] : [...JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")]
       let firstBatchReceived = false
 
-      eventSource.addEventListener("status", (e) => {
-        const data = JSON.parse(e.data)
-        setSyncMessage(data.message)
-      })
+      // 2. Poll for status
+      const poll = async () => {
+        try {
+          const pollRes = await fetch(`/api/sync?jobId=${jobId}`)
+          if (!pollRes.ok) throw new Error("Poll failed")
+          
+          const data = await pollRes.json()
+          setSyncMessage(data.message)
 
-      eventSource.addEventListener("batch", (e) => {
-        const data = JSON.parse(e.data)
-        const batchApps = data.applications as Application[]
-        
-        // Merge strategy
-        for (const newApp of batchApps) {
-          const idx = currentApps.findIndex(a => a.id === newApp.id)
-          if (idx >= 0) {
-            currentApps[idx] = newApp
-          } else {
-            currentApps.push(newApp)
+          if (data.applications?.length > 0) {
+            // Merge strategy
+            for (const newApp of data.applications) {
+              const idx = currentApps.findIndex(a => a.id === newApp.id)
+              if (idx >= 0) {
+                currentApps[idx] = newApp
+              } else {
+                currentApps.push(newApp)
+              }
+            }
+            
+            const sorted = [...currentApps].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            setApps(sorted)
+
+            if (isOnboarding && !firstBatchReceived) {
+              firstBatchReceived = true
+              setOnboarded(true)
+              localStorage.setItem(ONBOARDED_KEY, "true")
+              localStorage.setItem("jobtracker_onboard_date", onboardDate)
+            }
           }
+
+          if (data.status === "done") {
+            const now = new Date().toISOString()
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(currentApps))
+            localStorage.setItem(SYNCED_AT_KEY, now)
+            setSyncedAt(now)
+            setSyncMessage(null)
+            setLoading(false)
+            if (isOnboarding) setOnboarded(true)
+            return true // Stop polling
+          }
+
+          if (data.status === "error") {
+            setError(data.error || "Sync failed")
+            setLoading(false)
+            setSyncMessage(null)
+            if (isOnboarding) setOnboarded(true)
+            return true // Stop polling
+          }
+
+          return false // Continue polling
+        } catch (e) {
+          console.error("Poll error:", e)
+          setError("Connection lost — retrying...")
+          return false
         }
-        
-        const sorted = [...currentApps].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-        setApps(sorted)
+      }
 
-        // Reveal dashboard on first batch if onboarding
-        if (isOnboarding && !firstBatchReceived) {
-          firstBatchReceived = true
-          setOnboarded(true)
-          localStorage.setItem(ONBOARDED_KEY, "true")
-          localStorage.setItem("jobtracker_onboard_date", onboardDate)
-        }
-      })
-
-      eventSource.addEventListener("done", (e) => {
-        const now = new Date().toISOString()
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(currentApps))
-        localStorage.setItem(SYNCED_AT_KEY, now)
-        setSyncedAt(now)
-        setSyncMessage(null)
-        setLoading(false)
-        
-        // Ensure modal is gone if it was a very fast sync or empty
-        if (isOnboarding) setOnboarded(true)
-        
-        eventSource.close()
-      })
-
-      eventSource.addEventListener("error", (e) => {
-        console.error("Sync stream error:", e)
-        setError("Sync interrupted — partial results saved.")
-        setLoading(false)
-        setSyncMessage(null)
-        if (isOnboarding) setOnboarded(true)
-        eventSource.close()
-      })
+      // Start polling loop
+      const interval = setInterval(async () => {
+        const shouldStop = await poll()
+        if (shouldStop) clearInterval(interval)
+      }, 2000)
 
     } catch (e) {
       setError(e instanceof Error ? e.message : "An unknown error occurred")
