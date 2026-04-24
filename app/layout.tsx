@@ -9,6 +9,30 @@ const geist = Geist({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "JobTracker",
   description: "Track job applications automatically from Gmail",
+  keywords: [
+    "job tracker",
+    "application tracker",
+    "gmail job tracker",
+    "career organizer",
+    "job search tool",
+    "application management",
+  ],
+  openGraph: {
+    title: "JobTracker",
+    description: "Track job applications automatically from Gmail",
+    url: "https://jobtracker.ninocabiltes.dev",
+    siteName: "JobTracker",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "JobTracker Banner",
+      },
+    ],
+    locale: "en_US",
+    type: "website",
+  },
 }
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
