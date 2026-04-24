@@ -31,7 +31,7 @@ export default function Dashboard() {
     if (loading) return
     setLoading(true)
     setError("")
-    setSyncMessage("Initializing sync...")
+    setSyncMessage("Searching Gmail for job emails...")
     
     try {
       const lastSync = localStorage.getItem(SYNCED_AT_KEY)
@@ -42,84 +42,90 @@ export default function Dashboard() {
         ? new Date(lastSync).toISOString().split("T")[0].replace(/-/g, "/")
         : onboardDate
 
-      // 1. Start the sync job
-      const startRes = await fetch("/api/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ after: afterDate, mode: isOnboarding ? "onboard" : "sync" })
-      })
-
-      if (!startRes.ok) {
-        throw new Error(await startRes.text() || "Failed to start sync")
-      }
-
-      const { jobId } = await startRes.json()
       let currentApps = isOnboarding ? [] : [...JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")]
       let firstBatchReceived = false
 
-      // 2. Poll for status
-      const poll = async () => {
-        try {
-          const pollRes = await fetch(`/api/sync?jobId=${jobId}`)
-          if (!pollRes.ok) throw new Error("Poll failed")
+      // Phase 1: Discover thread IDs
+      const discoverRes = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phase: "discover", after: afterDate, mode: isOnboarding ? "onboard" : "sync" })
+      })
+
+      if (!discoverRes.ok) {
+        throw new Error(await discoverRes.text() || "Failed to discover threads")
+      }
+
+      const { threadIds, total } = await discoverRes.json()
+
+      if (!threadIds || threadIds.length === 0) {
+        setSyncMessage(null)
+        setLoading(false)
+        if (isOnboarding) {
+          setOnboarded(true)
+          localStorage.setItem(ONBOARDED_KEY, "true")
+          localStorage.setItem("jobtracker_onboard_date", onboardDate)
+        }
+        return
+      }
+
+      setSyncMessage(`Found ${total} potential threads. Processing...`)
+
+      // Phase 2: Process in batches of 10
+      const BATCH_SIZE = 10
+      const totalBatches = Math.ceil(threadIds.length / BATCH_SIZE)
+
+      for (let i = 0; i < threadIds.length; i += BATCH_SIZE) {
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1
+        const batchIds = threadIds.slice(i, i + BATCH_SIZE)
+
+        setSyncMessage(`Classifying batch ${batchNum} of ${totalBatches}...`)
+
+        const processRes = await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phase: "process", threadIds: batchIds })
+        })
+
+        if (!processRes.ok) {
+          console.warn(`Batch ${batchNum} failed, skipping...`)
+          continue
+        }
+
+        const { applications: batchApps } = await processRes.json()
+
+        if (batchApps?.length > 0) {
+          // Merge strategy
+          for (const newApp of batchApps) {
+            const idx = currentApps.findIndex(a => a.id === newApp.id)
+            if (idx >= 0) {
+              currentApps[idx] = newApp
+            } else {
+              currentApps.push(newApp)
+            }
+          }
           
-          const data = await pollRes.json()
-          setSyncMessage(data.message)
+          const sorted = [...currentApps].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          setApps(sorted)
 
-          if (data.applications?.length > 0) {
-            // Merge strategy
-            for (const newApp of data.applications) {
-              const idx = currentApps.findIndex(a => a.id === newApp.id)
-              if (idx >= 0) {
-                currentApps[idx] = newApp
-              } else {
-                currentApps.push(newApp)
-              }
-            }
-            
-            const sorted = [...currentApps].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-            setApps(sorted)
-
-            if (isOnboarding && !firstBatchReceived) {
-              firstBatchReceived = true
-              setOnboarded(true)
-              localStorage.setItem(ONBOARDED_KEY, "true")
-              localStorage.setItem("jobtracker_onboard_date", onboardDate)
-            }
+          // Reveal dashboard on first batch during onboarding
+          if (isOnboarding && !firstBatchReceived) {
+            firstBatchReceived = true
+            setOnboarded(true)
+            localStorage.setItem(ONBOARDED_KEY, "true")
+            localStorage.setItem("jobtracker_onboard_date", onboardDate)
           }
-
-          if (data.status === "done") {
-            const now = new Date().toISOString()
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(currentApps))
-            localStorage.setItem(SYNCED_AT_KEY, now)
-            setSyncedAt(now)
-            setSyncMessage(null)
-            setLoading(false)
-            if (isOnboarding) setOnboarded(true)
-            return true // Stop polling
-          }
-
-          if (data.status === "error") {
-            setError(data.error || "Sync failed")
-            setLoading(false)
-            setSyncMessage(null)
-            if (isOnboarding) setOnboarded(true)
-            return true // Stop polling
-          }
-
-          return false // Continue polling
-        } catch (e) {
-          console.error("Poll error:", e)
-          setError("Connection lost — retrying...")
-          return false
         }
       }
 
-      // Start polling loop
-      const interval = setInterval(async () => {
-        const shouldStop = await poll()
-        if (shouldStop) clearInterval(interval)
-      }, 2000)
+      // Done
+      const now = new Date().toISOString()
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(currentApps))
+      localStorage.setItem(SYNCED_AT_KEY, now)
+      setSyncedAt(now)
+      setSyncMessage(null)
+      setLoading(false)
+      if (isOnboarding) setOnboarded(true)
 
     } catch (e) {
       setError(e instanceof Error ? e.message : "An unknown error occurred")
