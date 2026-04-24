@@ -2,6 +2,7 @@
 import { useSession, signIn } from "next-auth/react"
 import Dashboard from "@/components/Dashboard"
 import { Mail, Zap, BarChart3, RefreshCw } from "lucide-react"
+import Link from "next/link"
 
 export default function Home() {
   const { data: session, status } = useSession()
@@ -101,6 +102,18 @@ export default function Home() {
           ))}
         </div>
       </div>
+
+      <footer className="border-t border-zinc-800/50 mt-20 py-8 px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-zinc-500 w-full">
+        <p>&copy; {new Date().getFullYear()} JobTracker. All rights reserved.</p>
+        <div className="flex gap-6">
+          <Link href="/privacy" className="hover:text-white transition-colors">
+            Privacy Policy
+          </Link>
+          <Link href="/terms" className="hover:text-white transition-colors">
+            Terms of Service
+          </Link>
+        </div>
+      </footer>
     </main>
   )
 }
